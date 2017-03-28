@@ -1,5 +1,4 @@
-/*
-  FUSE: Filesystem in Userspace
+/*  FUSE: Filesystem in Userspace
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
 
   This program can be distributed under the terms of the GNU LGPLv2.
@@ -16,22 +15,21 @@
 #define _FUSE_COMMON_H_
 
 #include "fuse_opt.h"
+#include "fuse_mem.h"
+
 #include <stdint.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <limits.h>
 
 /** Major version of FUSE library interface */
-#define FUSE_MAJOR_VERSION 2
+#define FUSE_MAJOR_VERSION 3
 
 /** Minor version of FUSE library interface */
-#define FUSE_MINOR_VERSION 9
+#define FUSE_MINOR_VERSION 0
 
 #define FUSE_MAKE_VERSION(maj, min)  ((maj) * 10 + (min))
 #define FUSE_VERSION FUSE_MAKE_VERSION(FUSE_MAJOR_VERSION, FUSE_MINOR_VERSION)
-
-/* This interface uses 64 bit off_t */
-#if _FILE_OFFSET_BITS != 64
-#error Please add -D_FILE_OFFSET_BITS=64 to your compile flags!
-#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,18 +38,15 @@ extern "C" {
 /**
  * Information about open files
  *
- * Changed in version 2.5
+ * Changed in version 3.0
  */
 struct fuse_file_info {
 	/** Open flags.	 Available in open() and release() */
 	int flags;
 
-	/** Old file handle, don't use */
-	unsigned long fh_old;
-
 	/** In case of a write operation indicates if this was caused by a
 	    writepage */
-	int writepage;
+	unsigned int writepage : 1;
 
 	/** Can be filled in by open, to use direct I/O on this file.
 	    Introduced in version 2.4 */
@@ -85,6 +80,11 @@ struct fuse_file_info {
 
 	/** Lock owner id.  Available in locking operations and flush */
 	uint64_t lock_owner;
+
+	/** Requested poll events.  Available in ->poll.  Only set on kernels
+	    which support it.  If unsupported, this field is set to zero.
+	    Introduced in version 3.0 */
+	uint32_t poll_events;
 };
 
 /**
@@ -100,18 +100,30 @@ struct fuse_file_info {
  * FUSE_CAP_SPLICE_MOVE: ability to move data to the fuse device with splice()
  * FUSE_CAP_SPLICE_READ: ability to use splice() to read from the fuse device
  * FUSE_CAP_IOCTL_DIR: ioctl support on directories
+ * FUSE_CAP_AUTO_INVAL_DATA: automatically invalidate cached pages
+ * FUSE_CAP_DO_READDIRPLUS: do READDIRPLUS (READDIR+LOOKUP in one)
+ * FUSE_CAP_READDIRPLUS_AUTO: adaptive readdirplus
+ * FUSE_CAP_ASYNC_DIO: asynchronous direct I/O submission
+ * FUSE_CAP_WRITEBACK_CACHE: use writeback cache for buffered writes
+ * FUSE_CAP_NO_OPEN_SUPPORT: support zero-message opens
  */
-#define FUSE_CAP_ASYNC_READ	(1 << 0)
-#define FUSE_CAP_POSIX_LOCKS	(1 << 1)
-#define FUSE_CAP_ATOMIC_O_TRUNC	(1 << 3)
-#define FUSE_CAP_EXPORT_SUPPORT	(1 << 4)
-#define FUSE_CAP_BIG_WRITES	(1 << 5)
-#define FUSE_CAP_DONT_MASK	(1 << 6)
-#define FUSE_CAP_SPLICE_WRITE	(1 << 7)
-#define FUSE_CAP_SPLICE_MOVE	(1 << 8)
-#define FUSE_CAP_SPLICE_READ	(1 << 9)
-#define FUSE_CAP_FLOCK_LOCKS	(1 << 10)
-#define FUSE_CAP_IOCTL_DIR	(1 << 11)
+#define FUSE_CAP_ASYNC_READ		(1 << 0)
+#define FUSE_CAP_POSIX_LOCKS		(1 << 1)
+#define FUSE_CAP_ATOMIC_O_TRUNC		(1 << 3)
+#define FUSE_CAP_EXPORT_SUPPORT		(1 << 4)
+#define FUSE_CAP_BIG_WRITES		(1 << 5)
+#define FUSE_CAP_DONT_MASK		(1 << 6)
+#define FUSE_CAP_SPLICE_WRITE		(1 << 7)
+#define FUSE_CAP_SPLICE_MOVE		(1 << 8)
+#define FUSE_CAP_SPLICE_READ		(1 << 9)
+#define FUSE_CAP_FLOCK_LOCKS		(1 << 10)
+#define FUSE_CAP_IOCTL_DIR		(1 << 11)
+#define FUSE_CAP_AUTO_INVAL_DATA 	(1 << 12)
+#define FUSE_CAP_READDIRPLUS		(1 << 13)
+#define FUSE_CAP_READDIRPLUS_AUTO	(1 << 14)
+#define FUSE_CAP_ASYNC_DIO		(1 << 15)
+#define FUSE_CAP_WRITEBACK_CACHE	(1 << 16)
+#define FUSE_CAP_NO_OPEN_SUPPORT	(1 << 17)
 
 /**
  * Ioctl flags
@@ -184,9 +196,17 @@ struct fuse_conn_info {
 	unsigned congestion_threshold;
 
 	/**
+	 * Time granularity if kernel is responsible for setting times (in nsec)
+	 *
+	 * Should be power of 10.  A zero (default) value is equivalent to
+	 * 1000000000 (1sec).
+	 */
+	unsigned time_gran;
+
+	/**
 	 * For future use.
 	 */
-	unsigned reserved[23];
+	unsigned reserved[22];
 };
 
 struct fuse_session;
@@ -251,6 +271,13 @@ int fuse_daemonize(int foreground);
  * @return the version
  */
 int fuse_version(void);
+
+/**
+ * Get the full package version string of the library
+ *
+ * @return the package version
+ */
+const char *fuse_pkgversion(void);
 
 /**
  * Destroy poll handle
@@ -449,8 +476,15 @@ ssize_t fuse_buf_copy(struct fuse_bufvec *dst, struct fuse_bufvec *src,
  * Stores session in a global variable.	 May only be called once per
  * process until fuse_remove_signal_handlers() is called.
  *
+ * Once either of the POSIX signals arrives, the exit_handler() in
+ * fuse_signals.c is called:
+ * \snippet fuse_signals.c doxygen_exit_handler
+ *
  * @param se the session to exit
  * @return 0 on success, -1 on failure
+ *
+ * See also:
+ * fuse_remove_signal_handlers()
  */
 int fuse_set_signal_handlers(struct fuse_session *se);
 
@@ -461,6 +495,9 @@ int fuse_set_signal_handlers(struct fuse_session *se);
  * be called again.
  *
  * @param se the same session as given in fuse_set_signal_handlers()
+ *
+ * See also:
+ * fuse_set_signal_handlers()
  */
 void fuse_remove_signal_handlers(struct fuse_session *se);
 
@@ -468,38 +505,32 @@ void fuse_remove_signal_handlers(struct fuse_session *se);
  * Compatibility stuff					       *
  * ----------------------------------------------------------- */
 
-#if FUSE_USE_VERSION < 26
-#    ifdef __FreeBSD__
-#	 if FUSE_USE_VERSION < 25
-#	     error On FreeBSD API version 25 or greater must be used
-#	 endif
-#    endif
-#    include "fuse_common_compat.h"
-#    undef FUSE_MINOR_VERSION
-#    undef fuse_main
-#    define fuse_unmount fuse_unmount_compat22
-#    if FUSE_USE_VERSION == 25
-#	 define FUSE_MINOR_VERSION 5
-#	 define fuse_mount fuse_mount_compat25
-#    elif FUSE_USE_VERSION == 24 || FUSE_USE_VERSION == 22
-#	 define FUSE_MINOR_VERSION 4
-#	 define fuse_mount fuse_mount_compat22
-#    elif FUSE_USE_VERSION == 21
-#	 define FUSE_MINOR_VERSION 1
-#	 define fuse_mount fuse_mount_compat22
-#    elif FUSE_USE_VERSION == 11
-#	 warning Compatibility with API version 11 is deprecated
-#	 undef FUSE_MAJOR_VERSION
-#	 define FUSE_MAJOR_VERSION 1
-#	 define FUSE_MINOR_VERSION 1
-#	 define fuse_mount fuse_mount_compat1
-#    else
-#	 error Compatibility with API version other than 21, 22, 24, 25 and 11 not supported
-#    endif
+#if !defined(FUSE_USE_VERSION) || FUSE_USE_VERSION < 30
+#  error only API version 30 or greater is supported
 #endif
 
 #ifdef __cplusplus
 }
 #endif
+
+
+/*
+ * This interface uses 64 bit off_t.
+ *
+ * On 32bit systems please add -D_FILE_OFFSET_BITS=64 to your compile flags!
+ */
+
+#if defined(__GNUC__) && (__GNUC__ > 4 || __GNUC__ == 4 && __GNUC_MINOR__ >= 6) && !defined __cplusplus
+_Static_assert(sizeof(off_t) == 8, "fuse: off_t must be 64bit");
+#else
+struct _fuse_off_t_must_be_64bit_dummy_struct \
+	{ unsigned _fuse_off_t_must_be_64bit:((sizeof(off_t) == 8) ? 1 : -1); };
+#endif
+
+
+struct fuse_fsm;
+typedef int (*fuse_async_get_msg_t)(void* payload,int *err,struct fuse_fsm** fsm);
+
+void fuse_buf_free(struct fuse_bufvec *buf);
 
 #endif /* _FUSE_COMMON_H_ */

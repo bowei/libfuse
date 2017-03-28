@@ -44,7 +44,7 @@ extern "C" {
 #define FUSE_ROOT_ID 1
 
 /** Inode number type */
-typedef unsigned long fuse_ino_t;
+typedef uint64_t fuse_ino_t;
 
 /** Request pointer type */
 typedef struct fuse_req *fuse_req_t;
@@ -88,7 +88,7 @@ struct fuse_entry_param {
 	 * it as an error.
 	 *
 	 */
-	unsigned long generation;
+	uint64_t generation;
 
 	/** Inode attributes.
 	 *
@@ -122,7 +122,7 @@ struct fuse_ctx {
 };
 
 struct fuse_forget_data {
-	uint64_t ino;
+	fuse_ino_t ino;
 	uint64_t nlookup;
 };
 
@@ -135,6 +135,7 @@ struct fuse_forget_data {
 #define FUSE_SET_ATTR_MTIME	(1 << 5)
 #define FUSE_SET_ATTR_ATIME_NOW	(1 << 7)
 #define FUSE_SET_ATTR_MTIME_NOW	(1 << 8)
+#define FUSE_SET_ATTR_CTIME	(1 << 10)
 
 /* ----------------------------------------------------------- *
  * Request methods and replies				       *
@@ -171,7 +172,7 @@ struct fuse_lowlevel_ops {
 	 *
 	 * @param userdata the user data passed to fuse_lowlevel_new()
 	 */
-	void (*init) (void *userdata, struct fuse_conn_info *conn);
+    void (*init) (void *userdata, struct fuse_conn_info *conn);
 
 	/**
 	 * Clean up filesystem
@@ -233,7 +234,7 @@ struct fuse_lowlevel_ops {
 	 * @param ino the inode number
 	 * @param nlookup the number of lookups to forget
 	 */
-	void (*forget) (fuse_req_t req, fuse_ino_t ino, unsigned long nlookup);
+	void (*forget) (fuse_req_t req, fuse_ino_t ino, uint64_t nlookup);
 
 	/**
 	 * Get file attributes
@@ -392,7 +393,8 @@ struct fuse_lowlevel_ops {
 	 * @param newname new name
 	 */
 	void (*rename) (fuse_req_t req, fuse_ino_t parent, const char *name,
-			fuse_ino_t newparent, const char *newname);
+			fuse_ino_t newparent, const char *newname,
+			unsigned int flags);
 
 	/**
 	 * Create a hard link
@@ -600,6 +602,9 @@ struct fuse_lowlevel_ops {
 	 *
 	 * fi->fh will contain the value set by the opendir method, or
 	 * will be undefined if the opendir method didn't set any value.
+         *
+	 * Returning a directory entry from readdir() does not affect
+	 * its lookup count.
 	 *
 	 * Valid replies:
 	 *   fuse_reply_buf
@@ -1016,6 +1021,36 @@ struct fuse_lowlevel_ops {
 	 */
 	void (*fallocate) (fuse_req_t req, fuse_ino_t ino, int mode,
 		       off_t offset, off_t length, struct fuse_file_info *fi);
+
+	/**
+	 * Read directory with attributes
+	 *
+	 * Send a buffer filled using fuse_add_direntry_plus(), with size not
+	 * exceeding the requested size.  Send an empty buffer on end of
+	 * stream.
+	 *
+	 * fi->fh will contain the value set by the opendir method, or
+	 * will be undefined if the opendir method didn't set any value.
+         *
+	 * In contrast to readdir() (which does not affect the lookup counts),
+	 * the lookup count of every entry returned by readdirplus(), except "."
+	 * and "..", is incremented by one.
+	 *
+	 * Introduced in version 3.0
+	 *
+	 * Valid replies:
+	 *   fuse_reply_buf
+	 *   fuse_reply_data
+	 *   fuse_reply_err
+	 *
+	 * @param req request handle
+	 * @param ino the inode number
+	 * @param size maximum number of bytes to send
+	 * @param off offset to continue reading the directory stream
+	 * @param fi file information
+	 */
+	void (*readdirplus) (fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
+			 struct fuse_file_info *fi);
 };
 
 /**
@@ -1150,6 +1185,11 @@ int fuse_reply_buf(fuse_req_t req, const char *buf, size_t size);
  * Possible requests:
  *   read, readdir, getxattr, listxattr
  *
+ * Side effects:
+ *   when used to return data from a readdirplus() (but not readdir())
+ *   call, increments the lookup count of each returned entry by one
+ *   on success.
+ *
  * @param req request handle
  * @param bufv buffer vector
  * @param flags flags controlling the copy
@@ -1250,6 +1290,34 @@ int fuse_reply_bmap(fuse_req_t req, uint64_t idx);
 size_t fuse_add_direntry(fuse_req_t req, char *buf, size_t bufsize,
 			 const char *name, const struct stat *stbuf,
 			 off_t off);
+
+/**
+ * Add a directory entry to the buffer with the attributes
+ *
+ * Buffer needs to be large enough to hold the entry.  If it's not,
+ * then the entry is not filled in but the size of the entry is still
+ * returned.  The caller can check this by comparing the bufsize
+ * parameter with the returned entry size.  If the entry size is
+ * larger than the buffer size, the operation failed.
+ *
+ * From the 'stbuf' argument the st_ino field and bits 12-15 of the
+ * st_mode field are used.  The other fields are ignored.
+ *
+ * Note: offsets do not necessarily represent physical offsets, and
+ * could be any marker, that enables the implementation to find a
+ * specific point in the directory stream.
+ *
+ * @param req request handle
+ * @param buf the point where the new entry will be added to the buffer
+ * @param bufsize remaining size of the buffer
+ * @param name the name of the entry
+ * @param e the directory entry
+ * @param off the offset of the next entry
+ * @return the space needed for the entry
+ */
+size_t fuse_add_direntry_plus(fuse_req_t req, char *buf, size_t bufsize,
+			      const char *name,
+			      const struct fuse_entry_param *e, off_t off);
 
 /**
  * Reply to ask for data fetch and output buffer preparation.  ioctl
@@ -1499,9 +1567,6 @@ int fuse_req_interrupted(fuse_req_t req);
  * Filesystem setup					       *
  * ----------------------------------------------------------- */
 
-/* Deprecated, don't use */
-int fuse_lowlevel_is_lib_option(const char *opt);
-
 /**
  * Create a low level session
  *
@@ -1510,6 +1575,9 @@ int fuse_lowlevel_is_lib_option(const char *opt);
  * @param op_size sizeof(struct fuse_lowlevel_ops)
  * @param userdata user data
  * @return the created session object, or NULL on failure
+ *
+ * Example: See hello_ll.c:
+ *   \snippet hello_ll.c doxygen_fuse_lowlevel_usage
  */
 struct fuse_session *fuse_lowlevel_new(struct fuse_args *args,
 				       const struct fuse_lowlevel_ops *op,
@@ -1520,60 +1588,7 @@ struct fuse_session *fuse_lowlevel_new(struct fuse_args *args,
  * ----------------------------------------------------------- */
 
 /**
- * Session operations
- *
- * This is used in session creation
- */
-struct fuse_session_ops {
-	/**
-	 * Hook to process a request (mandatory)
-	 *
-	 * @param data user data passed to fuse_session_new()
-	 * @param buf buffer containing the raw request
-	 * @param len request length
-	 * @param ch channel on which the request was received
-	 */
-	void (*process) (void *data, const char *buf, size_t len,
-			 struct fuse_chan *ch);
-
-	/**
-	 * Hook for session exit and reset (optional)
-	 *
-	 * @param data user data passed to fuse_session_new()
-	 * @param val exited status (1 - exited, 0 - not exited)
-	 */
-	void (*exit) (void *data, int val);
-
-	/**
-	 * Hook for querying the current exited status (optional)
-	 *
-	 * @param data user data passed to fuse_session_new()
-	 * @return 1 if exited, 0 if not exited
-	 */
-	int (*exited) (void *data);
-
-	/**
-	 * Hook for cleaning up the channel on destroy (optional)
-	 *
-	 * @param data user data passed to fuse_session_new()
-	 */
-	void (*destroy) (void *data);
-};
-
-/**
- * Create a new session
- *
- * @param op session operations
- * @param data user data
- * @return new session object, or NULL on failure
- */
-struct fuse_session *fuse_session_new(struct fuse_session_ops *op, void *data);
-
-/**
  * Assign a channel to a session
- *
- * Note: currently only a single channel may be assigned.  This may
- * change in the future
  *
  * If a session is destroyed, the assigned channel is also destroyed
  *
@@ -1583,7 +1598,7 @@ struct fuse_session *fuse_session_new(struct fuse_session_ops *op, void *data);
 void fuse_session_add_chan(struct fuse_session *se, struct fuse_chan *ch);
 
 /**
- * Remove a channel from a session
+ * Remove the channel from a session
  *
  * If the channel is not assigned to a session, then this is a no-op
  *
@@ -1592,35 +1607,17 @@ void fuse_session_add_chan(struct fuse_session *se, struct fuse_chan *ch);
 void fuse_session_remove_chan(struct fuse_chan *ch);
 
 /**
- * Iterate over the channels assigned to a session
- *
- * The iterating function needs to start with a NULL channel, and
- * after that needs to pass the previously returned channel to the
- * function.
+ * Return channel assigned to the session
  *
  * @param se the session
- * @param ch the previous channel, or NULL
- * @return the next channel, or NULL if no more channels exist
+ * @return the channel
  */
-struct fuse_chan *fuse_session_next_chan(struct fuse_session *se,
-					 struct fuse_chan *ch);
-
-/**
- * Process a raw request
- *
- * @param se the session
- * @param buf buffer containing the raw request
- * @param len request length
- * @param ch channel on which the request was received
- */
-void fuse_session_process(struct fuse_session *se, const char *buf, size_t len,
-			  struct fuse_chan *ch);
+struct fuse_chan *fuse_session_chan(struct fuse_session *se);
 
 /**
  * Process a raw request supplied in a generic buffer
  *
- * This is a more generic version of fuse_session_process().  The
- * fuse_buf may contain a memory buffer or a pipe file descriptor.
+ * The fuse_buf may contain a memory buffer or a pipe file descriptor.
  *
  * @param se the session
  * @param buf the fuse_buf containing the request
@@ -1632,17 +1629,16 @@ void fuse_session_process_buf(struct fuse_session *se,
 /**
  * Receive a raw request supplied in a generic buffer
  *
- * This is a more generic version of fuse_chan_recv().  The fuse_buf
- * supplied to this function contains a suitably allocated memory
+ * The fuse_buf supplied to this function contains a suitably allocated memory
  * buffer.  This may be overwritten with a file descriptor buffer.
  *
  * @param se the session
  * @param buf the fuse_buf to store the request in
- * @param chp pointer to the channel
+ * @param ch the channel
  * @return the actual size of the raw request, or -errno on error
  */
 int fuse_session_receive_buf(struct fuse_session *se, struct fuse_buf *buf,
-			     struct fuse_chan **chp);
+			     struct fuse_chan *ch);
 
 /**
  * Destroy a session
@@ -1652,7 +1648,10 @@ int fuse_session_receive_buf(struct fuse_session *se, struct fuse_buf *buf,
 void fuse_session_destroy(struct fuse_session *se);
 
 /**
- * Exit a session
+ * Exit a session.
+ *
+ * This function is invoked by the POSIX signal handlers, when registered using:
+ * * fuse_set_signal_handlers()
  *
  * @param se the session
  */
@@ -1674,20 +1673,20 @@ void fuse_session_reset(struct fuse_session *se);
 int fuse_session_exited(struct fuse_session *se);
 
 /**
- * Get the user data provided to the session
+ * Enter a single threaded, blocking event loop.
  *
- * @param se the session
- * @return the user data
- */
-void *fuse_session_data(struct fuse_session *se);
-
-/**
- * Enter a single threaded event loop
+ * Using POSIX signals this event loop can be exited but the session
+ * needs to be configued by issuing:
+ *   fuse_set_signal_handlers() first.
  *
  * @param se the session
  * @return 0 on success, -1 on error
  */
 int fuse_session_loop(struct fuse_session *se);
+
+
+int fuse_session_loop_async(struct fuse_session *se, int fd, fuse_async_get_msg_t callback_on_new_msg, void* callback_payload);
+
 
 /**
  * Enter a multi-threaded event loop
@@ -1702,56 +1701,6 @@ int fuse_session_loop_mt(struct fuse_session *se);
  * ----------------------------------------------------------- */
 
 /**
- * Channel operations
- *
- * This is used in channel creation
- */
-struct fuse_chan_ops {
-	/**
-	 * Hook for receiving a raw request
-	 *
-	 * @param ch pointer to the channel
-	 * @param buf the buffer to store the request in
-	 * @param size the size of the buffer
-	 * @return the actual size of the raw request, or -1 on error
-	 */
-	int (*receive)(struct fuse_chan **chp, char *buf, size_t size);
-
-	/**
-	 * Hook for sending a raw reply
-	 *
-	 * A return value of -ENOENT means, that the request was
-	 * interrupted, and the reply was discarded
-	 *
-	 * @param ch the channel
-	 * @param iov vector of blocks
-	 * @param count the number of blocks in vector
-	 * @return zero on success, -errno on failure
-	 */
-	int (*send)(struct fuse_chan *ch, const struct iovec iov[],
-		    size_t count);
-
-	/**
-	 * Destroy the channel
-	 *
-	 * @param ch the channel
-	 */
-	void (*destroy)(struct fuse_chan *ch);
-};
-
-/**
- * Create a new channel
- *
- * @param op channel operations
- * @param fd file descriptor of the channel
- * @param bufsize the minimal receive buffer size
- * @param data user data
- * @return the new channel object, or NULL on failure
- */
-struct fuse_chan *fuse_chan_new(struct fuse_chan_ops *op, int fd,
-				size_t bufsize, void *data);
-
-/**
  * Query the file descriptor of the channel
  *
  * @param ch the channel
@@ -1760,83 +1709,11 @@ struct fuse_chan *fuse_chan_new(struct fuse_chan_ops *op, int fd,
 int fuse_chan_fd(struct fuse_chan *ch);
 
 /**
- * Query the minimal receive buffer size
- *
- * @param ch the channel
- * @return the buffer size passed to fuse_chan_new()
- */
-size_t fuse_chan_bufsize(struct fuse_chan *ch);
-
-/**
- * Query the user data
- *
- * @param ch the channel
- * @return the user data passed to fuse_chan_new()
- */
-void *fuse_chan_data(struct fuse_chan *ch);
-
-/**
- * Query the session to which this channel is assigned
- *
- * @param ch the channel
- * @return the session, or NULL if the channel is not assigned
- */
-struct fuse_session *fuse_chan_session(struct fuse_chan *ch);
-
-/**
- * Receive a raw request
- *
- * A return value of -ENODEV means, that the filesystem was unmounted
- *
- * @param ch pointer to the channel
- * @param buf the buffer to store the request in
- * @param size the size of the buffer
- * @return the actual size of the raw request, or -errno on error
- */
-int fuse_chan_recv(struct fuse_chan **ch, char *buf, size_t size);
-
-/**
- * Send a raw reply
- *
- * A return value of -ENOENT means, that the request was
- * interrupted, and the reply was discarded
- *
- * @param ch the channel
- * @param iov vector of blocks
- * @param count the number of blocks in vector
- * @return zero on success, -errno on failure
- */
-int fuse_chan_send(struct fuse_chan *ch, const struct iovec iov[],
-		   size_t count);
-
-/**
  * Destroy a channel
  *
  * @param ch the channel
  */
 void fuse_chan_destroy(struct fuse_chan *ch);
-
-/* ----------------------------------------------------------- *
- * Compatibility stuff					       *
- * ----------------------------------------------------------- */
-
-#if FUSE_USE_VERSION < 26
-#  include "fuse_lowlevel_compat.h"
-#  define fuse_chan_ops fuse_chan_ops_compat24
-#  define fuse_chan_new fuse_chan_new_compat24
-#  if FUSE_USE_VERSION == 25
-#    define fuse_lowlevel_ops fuse_lowlevel_ops_compat25
-#    define fuse_lowlevel_new fuse_lowlevel_new_compat25
-#  elif FUSE_USE_VERSION == 24
-#    define fuse_lowlevel_ops fuse_lowlevel_ops_compat
-#    define fuse_lowlevel_new fuse_lowlevel_new_compat
-#    define fuse_file_info fuse_file_info_compat
-#    define fuse_reply_statfs fuse_reply_statfs_compat
-#    define fuse_reply_open fuse_reply_open_compat
-#  else
-#    error Compatibility with low-level API version < 24 not supported
-#  endif
-#endif
 
 #ifdef __cplusplus
 }

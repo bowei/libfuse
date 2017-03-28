@@ -3,23 +3,35 @@
 	* libfuse: fix warning mount.c:receive_fd().  Reported by Albert
 	Berger
 
+	* libfuse: added fuse_pkgversion() function to retrieve the full
+	version string, per autoconf.  Patch by Christopher Harrison
+
 2015-06-29  Miklos Szeredi <miklos@szeredi.hu>
 
 	* libfuse: fix possible memory leak.  Reported by Jose R. Guzman
 
-2015-05-22  Miklos Szeredi <miklos@szeredi.hu>
+2015-05-26  Miklos Szeredi <miklos@szeredi.hu>
 
-	* Released 2.9.4
+	* Use system directory for system-wide udev rules by default. This
+	ensures that fuse functions correctly on stateless operating
+	systems without requiring use of the site configuration directory
+	(/etc/).  Patch by Ikey Doherty
 
 2015-05-22  Miklos Szeredi <miklos@szeredi.hu>
 
 	* libfuse: fix exec environment for mount and umount.  Found by
 	Tavis Ormandy (CVE-2015-3202).
 
+2015-04-23  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: add FUSE_CAP_NO_OPEN_SUPPORT flag to ->init()
+
 2015-02-26  Miklos Szeredi <miklos@szeredi.hu>
 
 	* libfuse: fix fuse_remove_signal_handlers() to properly restore
 	the default signal handler.  Reported by: Chris Johnson
+
+	* libfuse: fix handling of '.' and '..' in highlevel readdirplus
 
 2014-07-21  Miklos Szeredi <miklos@szeredi.hu>
 
@@ -36,19 +48,76 @@
 	result in EINVAL when mounting the filesystem.  This also needs a
 	fix in the kernel.
 
+	* libfuse: add "time_gran" option.  This allows the filesystem to
+	specify the time granularity it supports when the kernel is
+	responsible for updating times ("writeback_cache" option).
+
+	* libfuse: allow setting ctime in ->setattr()
+
+	* libfuse: add flags to ->rename().  See renameat2() system call
+	in linux-3.15 and later kernels.
+
 2014-03-26  Miklos Szeredi <miklos@szeredi.hu>
 
-	* Initilaize stat buffer passed to ->getattr() and ->fgetattr() to
+	* Initialize stat buffer passed to ->getattr() and ->fgetattr() to
 	zero in all cases.  Reported by Daniel Iwan
+
+2014-03-05  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: implement readdirplus for high-level API.  Reuse the
+	old "readdir" callback, but add a flags argument, that has
+	FUSE_READDIR_PLUS in case this is a "plus" version.  Filesystems
+	can safely ignore this flag, but if they want they can add
+	optimizations based on it: i.e. only retrieve the full attributes
+	in PLUS mode.  The filler function is also given a flags argument
+	and the filesystem can set FUSE_FILL_DIR_PLUS if all the
+	attributes in "stat" are valid.  Original patch by Eric Wong
+
+2014-02-21  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: added fuse_lo-plus.c to the examples
+
+2014-02-04  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: Don't use constructor functions for loading modules.
+	Original patch by Fabrice Bauzac
+
+2014-01-29  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: Add "async_dio" and "writeback_cache" options.
+	Asynchronous direct I/O is supported by linux kernels 3.13 and
+	later, writeback caching is supported by 3.14 and later.
 
 2013-08-26  Miklos Szeredi <miklos@szeredi.hu>
 
 	* libfuse: Add missing includes.  This allows compiling fuse with
 	musl.  Patch by Daniel Thau
 
-2013-07-01  Miklos Szeredi <miklos@szeredi.hu>
+2013-07-26  Miklos Szeredi <miklos@szeredi.hu>
 
-	* Released 2.9.3
+	* Print help on stdout instead of stderr
+
+2013-07-25  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: fuse -> fuse3.  Allow 2.X and 3.X to coexist.  Includes
+	are now stored under /usr/include/fuse3 and library is named
+	libfuse3.*.  Invoke pkg-config with "fuse3" as the first argument
+	to build with version 3 of the library.
+
+	* ulockmgr: strip ulockmgr support from this source package and
+	distribute it separately.  It is not needed for the building of
+	libfuse, only fusexmp_fh.  Check ulockmgr library in ./configure
+	and if not disable remote-lock suport in fusexmp_fh.
+
+2013-07-24  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: remove "-D_FILE_OFFSET_BITS=64" from fuse.pc, add
+	AC_SYS_LARGEFILE to your configure.ac instead.
+
+2013-06-21  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: set FD_CLOEXEC also when receiving device fd from
+	fusermount
 
 2013-06-20  Miklos Szeredi <miklos@szeredi.hu>
 
@@ -60,6 +129,67 @@
 	* libfuse: fix thread cancel race.  Exiting a worker my race with
 	cancelling that same worker.  This caused a segmenation
 	fault. Reported and tested by Anatol Pomozov
+
+2013-02-20  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: change the type of fuse_ino_t from 'unsigned long' to
+	'uint64_t'
+
+	* libfuse: use O_CLOEXEC flag when opening /dev/fuse device.
+	Patch by Richard W.M. Jones
+
+	* libfuse: don't force -D_FILE_OFFSET_BITS=64 in pkgconfig file.
+	Patch by Richard W.M. Jones
+
+2013-02-19  Miklos Szeredi <miklos@szeredi.hu>
+
+	* fuse_daemonize(): chdir to "/" even if not running in the
+	background for consistency.  Reported by Vladimir Rutsky
+
+2013-02-18  Miklos Szeredi <miklos@szeredi.hu>
+
+	* fuse_opt_parse(): when storing a newly allocated string for
+	format "%s", free the previous value stored at that location.
+	Reported by Marco Schuster
+
+2013-02-07  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: add readdirplus support in fuse_lowlevel_ops.  Patch by
+	Feng Shuo
+
+	* libfuse: add poll_events to fuse_file_info.  Patch by Enke Chen
+
+	* libfuse: fix fs cleanup.  Reported by Eric Wong
+
+	* libfuse: pass security context options to kernel.  Patch by
+	Dalvik Khertel
+
+	* libfuse: remove deprecated features:
+	- fuse_is_lib_option()
+	- fuse_invalidate()
+	- fuse_set_getcontext_func()
+	- fuse_loop_mt_proc()
+	- fuse_read_cmd()
+	- fuse_process_cmd()
+	- fuse_setup()
+	- fuse_teardown()
+	- fuse_exited()
+	- fuse_lowlevel_is_lib_option()
+	- fuse_operations.getdir()
+	- fuse_operations.utime()
+	- fuse_operations.utime_omit_ok
+
+2013-02-06  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: set close-on-exec flag on pipe file descriptors.  Patch
+	by Eric Wong
+
+	* libfuse: add missing INIT flags
+
+2013-02-05  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: fix fuse_get_context() in non fuse threads.  Reported
+	by Michael Berlin
 
 2013-02-04  Miklos Szeredi <miklos@szeredi.hu>
 
@@ -102,6 +232,12 @@
 2012-08-13  Miklos Szeredi <miklos@szeredi.hu>
 
 	* Fix linking against GNU libiconv.  Patch by Natanael Copa
+
+2012-07-19  Miklos Szeredi <miklos@szeredi.hu>
+
+	* Start of 3.0 series.  This is going to be a new major version of
+	the library breaking backward compatibility on the binary level as
+	well as the source level.
 
 2012-07-19  Miklos Szeredi <miklos@szeredi.hu>
 

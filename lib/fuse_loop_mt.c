@@ -6,10 +6,12 @@
   See the file COPYING.LIB.
 */
 
+#include "config.h"
 #include "fuse_lowlevel.h"
 #include "fuse_misc.h"
 #include "fuse_kernel.h"
 #include "fuse_i.h"
+#include "fuse_log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,7 +30,7 @@ struct fuse_worker {
 	struct fuse_worker *next;
 	pthread_t thread_id;
 	size_t bufsize;
-	char *buf;
+	struct fuse_buf fbuf;
 	struct fuse_mt *mt;
 };
 
@@ -70,15 +72,10 @@ static void *fuse_do_work(void *data)
 
 	while (!fuse_session_exited(mt->se)) {
 		int isforget = 0;
-		struct fuse_chan *ch = mt->prevch;
-		struct fuse_buf fbuf = {
-			.mem = w->buf,
-			.size = w->bufsize,
-		};
 		int res;
 
 		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-		res = fuse_session_receive_buf(mt->se, &fbuf, &ch);
+		res = fuse_session_receive_buf(mt->se, &w->fbuf, mt->prevch);
 		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 		if (res == -EINTR)
 			continue;
@@ -100,8 +97,8 @@ static void *fuse_do_work(void *data)
 		 * This disgusting hack is needed so that zillions of threads
 		 * are not created on a burst of FORGET messages
 		 */
-		if (!(fbuf.flags & FUSE_BUF_IS_FD)) {
-			struct fuse_in_header *in = fbuf.mem;
+		if (!(w->fbuf.flags & FUSE_BUF_IS_FD)) {
+			struct fuse_in_header *in = w->fbuf.mem;
 
 			if (in->opcode == FUSE_FORGET ||
 			    in->opcode == FUSE_BATCH_FORGET)
@@ -114,7 +111,7 @@ static void *fuse_do_work(void *data)
 			fuse_loop_start_thread(mt);
 		pthread_mutex_unlock(&mt->lock);
 
-		fuse_session_process_buf(mt->se, &fbuf, ch);
+		fuse_session_process_buf(mt->se, &w->fbuf, mt->prevch);
 
 		pthread_mutex_lock(&mt->lock);
 		if (!isforget)
@@ -130,8 +127,8 @@ static void *fuse_do_work(void *data)
 			pthread_mutex_unlock(&mt->lock);
 
 			pthread_detach(w->thread_id);
-			free(w->buf);
-			free(w);
+			fuse_free(w->fbuf.mem);
+			fuse_free(w);
 			return NULL;
 		}
 		pthread_mutex_unlock(&mt->lock);
@@ -154,7 +151,7 @@ int fuse_start_thread(pthread_t *thread_id, void *(*func)(void *), void *arg)
 	pthread_attr_init(&attr);
 	stack_size = getenv(ENVNAME_THREAD_STACK);
 	if (stack_size && pthread_attr_setstacksize(&attr, atoi(stack_size)))
-		fprintf(stderr, "fuse: invalid stack size: %s\n", stack_size);
+		fuse_log_err( "fuse: invalid stack size: %s\n", stack_size);
 
 	/* Disallow signal reception in worker threads */
 	sigemptyset(&newset);
@@ -167,7 +164,7 @@ int fuse_start_thread(pthread_t *thread_id, void *(*func)(void *), void *arg)
 	pthread_sigmask(SIG_SETMASK, &oldset, NULL);
 	pthread_attr_destroy(&attr);
 	if (res != 0) {
-		fprintf(stderr, "fuse: error creating thread: %s\n",
+		fuse_log_err( "fuse: error creating thread: %s\n",
 			strerror(res));
 		return -1;
 	}
@@ -178,25 +175,18 @@ int fuse_start_thread(pthread_t *thread_id, void *(*func)(void *), void *arg)
 static int fuse_loop_start_thread(struct fuse_mt *mt)
 {
 	int res;
-	struct fuse_worker *w = malloc(sizeof(struct fuse_worker));
+	struct fuse_worker *w = fuse_malloc(sizeof(struct fuse_worker));
 	if (!w) {
-		fprintf(stderr, "fuse: failed to allocate worker structure\n");
+		fuse_log_err( "fuse: failed to allocate worker structure\n");
 		return -1;
 	}
 	memset(w, 0, sizeof(struct fuse_worker));
-	w->bufsize = fuse_chan_bufsize(mt->prevch);
-	w->buf = malloc(w->bufsize);
+	w->fbuf.mem = NULL;
 	w->mt = mt;
-	if (!w->buf) {
-		fprintf(stderr, "fuse: failed to allocate read buffer\n");
-		free(w);
-		return -1;
-	}
 
 	res = fuse_start_thread(&w->thread_id, fuse_do_work, w);
 	if (res == -1) {
-		free(w->buf);
-		free(w);
+		fuse_free(w);
 		return -1;
 	}
 	list_add_worker(w, &mt->main);
@@ -212,8 +202,8 @@ static void fuse_join_worker(struct fuse_mt *mt, struct fuse_worker *w)
 	pthread_mutex_lock(&mt->lock);
 	list_del_worker(w);
 	pthread_mutex_unlock(&mt->lock);
-	free(w->buf);
-	free(w);
+	fuse_free(w->fbuf.mem);
+	fuse_free(w);
 }
 
 int fuse_session_loop_mt(struct fuse_session *se)
@@ -224,7 +214,7 @@ int fuse_session_loop_mt(struct fuse_session *se)
 
 	memset(&mt, 0, sizeof(struct fuse_mt));
 	mt.se = se;
-	mt.prevch = fuse_session_next_chan(se, NULL);
+	mt.prevch = fuse_session_chan(se);
 	mt.error = 0;
 	mt.numworker = 0;
 	mt.numavail = 0;

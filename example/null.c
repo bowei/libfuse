@@ -4,11 +4,24 @@
 
   This program can be distributed under the terms of the GNU GPL.
   See the file COPYING.
-
-  gcc -Wall null.c `pkg-config fuse --cflags --libs` -o null
 */
 
-#define FUSE_USE_VERSION 26
+/** @file
+ *
+ * null.c - FUSE: Filesystem in Userspace
+ *
+ * \section section_compile compiling this example
+ *
+ * gcc -Wall null.c `pkg-config fuse3 --cflags --libs` -o null
+ *
+ * \section section_source the complete source
+ * \include null.c
+ */
+
+
+#define FUSE_USE_VERSION 30
+
+#include <config.h>
 
 #include <fuse.h>
 #include <string.h>
@@ -16,7 +29,7 @@
 #include <time.h>
 #include <errno.h>
 
-static int null_getattr(const char *path, struct stat *stbuf)
+static int null_getattr(struct fuse_fsm* fsm __attribute__ ((unused)), const char *path, struct stat *stbuf)
 {
 	if(strcmp(path, "/") != 0)
 		return -ENOENT;
@@ -32,7 +45,7 @@ static int null_getattr(const char *path, struct stat *stbuf)
 	return 0;
 }
 
-static int null_truncate(const char *path, off_t size)
+static int null_truncate(struct fuse_fsm* fsm __attribute__ ((unused)), const char *path, off_t size)
 {
 	(void) size;
 
@@ -42,7 +55,7 @@ static int null_truncate(const char *path, off_t size)
 	return 0;
 }
 
-static int null_open(const char *path, struct fuse_file_info *fi)
+static int null_open(struct fuse_fsm* fsm __attribute__ ((unused)), const char *path, struct fuse_file_info *fi)
 {
 	(void) fi;
 
@@ -52,7 +65,7 @@ static int null_open(const char *path, struct fuse_file_info *fi)
 	return 0;
 }
 
-static int null_read(const char *path, char *buf, size_t size,
+static int null_read(struct fuse_fsm* fsm __attribute__ ((unused)), const char *path, char *buf, size_t size,
 		     off_t offset, struct fuse_file_info *fi)
 {
 	(void) buf;
@@ -68,7 +81,7 @@ static int null_read(const char *path, char *buf, size_t size,
 	return size;
 }
 
-static int null_write(const char *path, const char *buf, size_t size,
+static int null_write(struct fuse_fsm* fsm __attribute__ ((unused)), const char *path, const char *buf, size_t size,
 		      off_t offset, struct fuse_file_info *fi)
 {
 	(void) buf;

@@ -4,11 +4,42 @@
 
   This program can be distributed under the terms of the GNU GPL.
   See the file COPYING.
-
-  gcc -Wall hello_ll.c `pkg-config fuse --cflags --libs` -o hello_ll
 */
 
-#define FUSE_USE_VERSION 26
+/** @file
+ *
+ * hello_ll.c - fuse low level functionality
+ *
+ * unlike hello.c this example will stay in the foreground. it also replaced
+ * the convenience function fuse_main(..) with a more low level approach.
+ *
+ * \section section_compile compiling this example
+ *
+ * gcc -Wall hello_ll.c `pkg-config fuse3 --cflags --libs` -o hello_ll
+ *
+ * \section section_usage usage
+ \verbatim
+ % mkdir mnt
+ % ./hello_ll mnt       # program will wait in foreground until you press CTRL+C
+ in a different shell do:
+ % ls -la mnt
+   total 4
+   drwxr-xr-x 2 root root      0 Jan  1  1970 ./
+   drwxrwx--- 1 root vboxsf 4096 Jun 16 23:12 ../
+   -r--r--r-- 1 root root     13 Jan  1  1970 hello
+ % cat mnt/hello
+   Hello World!
+ finally either press ctrl+c or do:
+ % fusermount -u mnt
+ \endverbatim
+ *
+ * \section section_source the complete source
+ * \include hello_ll.c
+ */
+
+#define FUSE_USE_VERSION 30
+
+#include <config.h>
 
 #include <fuse_lowlevel.h>
 #include <stdio.h>
@@ -151,6 +182,7 @@ static struct fuse_lowlevel_ops hello_ll_oper = {
 	.read		= hello_ll_read,
 };
 
+/*! [doxygen_fuse_lowlevel_usage] */
 int main(int argc, char *argv[])
 {
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
@@ -167,7 +199,10 @@ int main(int argc, char *argv[])
 		if (se != NULL) {
 			if (fuse_set_signal_handlers(se) != -1) {
 				fuse_session_add_chan(se, ch);
+
+				/* Block until ctrl+c or fusermount -u */
 				err = fuse_session_loop(se);
+
 				fuse_remove_signal_handlers(se);
 				fuse_session_remove_chan(ch);
 			}
@@ -179,3 +214,4 @@ int main(int argc, char *argv[])
 
 	return err ? 1 : 0;
 }
+/*! [doxygen_fuse_lowlevel_usage] */

@@ -6,7 +6,9 @@
   See the file COPYING.LIB
 */
 
+#include "config.h"
 #include "fuse_lowlevel.h"
+#include "fuse_log.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -14,12 +16,14 @@
 
 static struct fuse_session *fuse_instance;
 
+/*! [doxygen_exit_handler] */
 static void exit_handler(int sig)
 {
 	(void) sig;
 	if (fuse_instance)
 		fuse_session_exit(fuse_instance);
 }
+/*! [doxygen_exit_handler] */
 
 static int set_one_signal_handler(int sig, void (*handler)(int), int remove)
 {
@@ -59,7 +63,7 @@ int fuse_set_signal_handlers(struct fuse_session *se)
 void fuse_remove_signal_handlers(struct fuse_session *se)
 {
 	if (fuse_instance != se)
-		fprintf(stderr,
+		fuse_log_err(
 			"fuse: fuse_remove_signal_handlers: unknown session\n");
 	else
 		fuse_instance = NULL;
