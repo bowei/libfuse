@@ -6,10 +6,25 @@
   This program can be distributed under the terms of the GNU GPL.
   See the file COPYING.
 
-  gcc -Wall fioc.c `pkg-config fuse --cflags --libs` -o fioc
 */
 
-#define FUSE_USE_VERSION 26
+/** @file
+ * @tableofcontents
+ *
+ * fioc.c - FUSE fioc: FUSE ioctl example
+ *
+ * \section section_compile compiling this example
+ *
+ * gcc -Wall fioc.c `pkg-config fuse3 --cflags --libs` -o fioc
+ *
+ * \section section_source the complete source
+ * \include fioc.c
+ */
+
+
+#define FUSE_USE_VERSION 30
+
+#include <config.h>
 
 #include <fuse.h>
 #include <stdlib.h>
@@ -68,7 +83,7 @@ static int fioc_file_type(const char *path)
 	return FIOC_NONE;
 }
 
-static int fioc_getattr(const char *path, struct stat *stbuf)
+static int fioc_getattr(struct fuse_fsm* fsm __attribute__ ((unused)), const char *path, struct stat *stbuf)
 {
 	stbuf->st_uid = getuid();
 	stbuf->st_gid = getgid();
@@ -91,7 +106,7 @@ static int fioc_getattr(const char *path, struct stat *stbuf)
 	return 0;
 }
 
-static int fioc_open(const char *path, struct fuse_file_info *fi)
+static int fioc_open(struct fuse_fsm* fsm __attribute__ ((unused)), const char *path, struct fuse_file_info *fi)
 {
 	(void) fi;
 
@@ -100,7 +115,7 @@ static int fioc_open(const char *path, struct fuse_file_info *fi)
 	return -ENOENT;
 }
 
-static int fioc_do_read(char *buf, size_t size, off_t offset)
+static int fioc_do_read( char *buf, size_t size, off_t offset)
 {
 	if (offset >= fioc_size)
 		return 0;
@@ -113,7 +128,7 @@ static int fioc_do_read(char *buf, size_t size, off_t offset)
 	return size;
 }
 
-static int fioc_read(const char *path, char *buf, size_t size,
+static int fioc_read(struct fuse_fsm* fsm __attribute__ ((unused)), const char *path, char *buf, size_t size,
 		     off_t offset, struct fuse_file_info *fi)
 {
 	(void) fi;
@@ -124,7 +139,7 @@ static int fioc_read(const char *path, char *buf, size_t size,
 	return fioc_do_read(buf, size, offset);
 }
 
-static int fioc_do_write(const char *buf, size_t size, off_t offset)
+static int fioc_do_write( const char *buf, size_t size, off_t offset)
 {
 	if (fioc_expand(offset + size))
 		return -ENOMEM;
@@ -134,7 +149,7 @@ static int fioc_do_write(const char *buf, size_t size, off_t offset)
 	return size;
 }
 
-static int fioc_write(const char *path, const char *buf, size_t size,
+static int fioc_write(struct fuse_fsm* fsm __attribute__ ((unused)), const char *path, const char *buf, size_t size,
 		      off_t offset, struct fuse_file_info *fi)
 {
 	(void) fi;
@@ -145,7 +160,7 @@ static int fioc_write(const char *path, const char *buf, size_t size,
 	return fioc_do_write(buf, size, offset);
 }
 
-static int fioc_truncate(const char *path, off_t size)
+static int fioc_truncate(struct fuse_fsm* fsm __attribute__ ((unused)), const char *path, off_t size)
 {
 	if (fioc_file_type(path) != FIOC_FILE)
 		return -EINVAL;
@@ -153,23 +168,25 @@ static int fioc_truncate(const char *path, off_t size)
 	return fioc_resize(size);
 }
 
-static int fioc_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-			off_t offset, struct fuse_file_info *fi)
+static int fioc_readdir(struct fuse_fsm* fsm __attribute__ ((unused)), const char *path, void *buf, fuse_fill_dir_t filler,
+			off_t offset, struct fuse_file_info *fi,
+			enum fuse_readdir_flags flags)
 {
 	(void) fi;
 	(void) offset;
+	(void) flags;
 
 	if (fioc_file_type(path) != FIOC_ROOT)
 		return -ENOENT;
 
-	filler(buf, ".", NULL, 0);
-	filler(buf, "..", NULL, 0);
-	filler(buf, FIOC_NAME, NULL, 0);
+	filler(buf, ".", NULL, 0, 0);
+	filler(buf, "..", NULL, 0, 0);
+	filler(buf, FIOC_NAME, NULL, 0, 0);
 
 	return 0;
 }
 
-static int fioc_ioctl(const char *path, int cmd, void *arg,
+static int fioc_ioctl(struct fuse_fsm* fsm __attribute__ ((unused)), const char *path, int cmd, void *arg,
 		      struct fuse_file_info *fi, unsigned int flags, void *data)
 {
 	(void) arg;

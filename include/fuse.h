@@ -13,21 +13,14 @@
  *
  * This file defines the library interface of FUSE
  *
- * IMPORTANT: you should define FUSE_USE_VERSION before including this
- * header.  To use the newest API define it to 26 (recommended for any
- * new application), to use the old API define it to 21 (default) 22
- * or 25, to use the even older 1.X API define it to 11.
+ * IMPORTANT: you should define FUSE_USE_VERSION before including this header.
  */
-
-#ifndef FUSE_USE_VERSION
-#define FUSE_USE_VERSION 21
-#endif
 
 #include "fuse_common.h"
 
 #include <fcntl.h>
+#include <limits.h>
 #include <time.h>
-#include <utime.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -43,9 +36,34 @@ extern "C" {
 
 /** Handle for a FUSE filesystem */
 struct fuse;
+struct fuse_fsm;
+/**
+ * Readdir flags, passed to ->readdir()
+ */
+enum fuse_readdir_flags {
+	/**
+	 * "Plus" mode.
+	 *
+	 * The kernel wants to prefill the inode cache during readdir.  The
+	 * filesystem may honour this by filling in the attributes and setting
+	 * FUSE_FILL_DIR_FLAGS for the filler function.  The filesystem may also
+	 * just ignore this flag completely.
+	 */
+	FUSE_READDIR_PLUS = (1 << 0),
+};
 
-/** Structure containing a raw command */
-struct fuse_cmd;
+enum fuse_fill_dir_flags {
+	/**
+	 * "Plus" mode: all file attributes are valid
+	 *
+	 * The attributes are used by the kernel to prefill the inode cache
+	 * during a readdir.
+	 *
+	 * It is okay to set FUSE_FILL_DIR_PLUS if FUSE_READDIR_PLUS is not set
+	 * and vice versa.
+	 */
+	FUSE_FILL_DIR_PLUS = (1 << 1),
+};
 
 /** Function to add an entry in a readdir() operation
  *
@@ -53,15 +71,12 @@ struct fuse_cmd;
  * @param name the file name of the directory entry
  * @param stat file attributes, can be NULL
  * @param off offset of the next entry or zero
+ * @param flags fill flags
  * @return 1 if buffer is full, zero otherwise
  */
 typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
-				const struct stat *stbuf, off_t off);
-
-/* Used by deprecated getdir() method */
-typedef struct fuse_dirhandle *fuse_dirh_t;
-typedef int (*fuse_dirfil_t) (fuse_dirh_t h, const char *name, int type,
-			      ino_t ino);
+				const struct stat *stbuf, off_t off,
+				enum fuse_fill_dir_flags flags);
 
 /**
  * The file system operations:
@@ -86,13 +101,31 @@ typedef int (*fuse_dirfil_t) (fuse_dirh_t h, const char *name, int type,
  * is also a snapshot of the relevant wiki pages in the doc/ folder.
  */
 struct fuse_operations {
+	/**
+	 * Flag indicating that the path need not be calculated for
+	 * the following operations:
+	 *
+	 * read, write, flush, release, fsync, readdir, releasedir,
+	 * fsyncdir, ftruncate, fgetattr, lock, ioctl and poll
+	 *
+	 * If this flag is set then the path will not be calculaged even if the
+	 * file wasn't unlinked.  However the path can still be non-NULL if it
+	 * needs to be calculated for some other reason.
+	 */
+	unsigned int flag_nopath:1;
+
+	/**
+	 * Reserved flags, don't set
+	 */
+	unsigned int flag_reserved:31;
+
 	/** Get file attributes.
 	 *
 	 * Similar to stat().  The 'st_dev' and 'st_blksize' fields are
 	 * ignored.	 The 'st_ino' field is ignored except if the 'use_ino'
 	 * mount option is given.
 	 */
-	int (*getattr) (const char *, struct stat *);
+	int (*getattr) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct stat *);
 
 	/** Read the target of a symbolic link
 	 *
@@ -102,10 +135,7 @@ struct fuse_operations {
 	 * buffer, it should be truncated.	The return value should be 0
 	 * for success.
 	 */
-	int (*readlink) (const char *, char *, size_t);
-
-	/* Deprecated, use readdir() instead */
-	int (*getdir) (const char *, fuse_dirh_t, fuse_dirfil_t);
+	int (*readlink) (struct fuse_fsm* fsm __attribute__((unused)), const char *, char *, size_t);
 
 	/** Create a file node
 	 *
@@ -113,45 +143,39 @@ struct fuse_operations {
 	 * nodes.  If the filesystem defines a create() method, then for
 	 * regular files that will be called instead.
 	 */
-	int (*mknod) (const char *, mode_t, dev_t);
+	int (*mknod) (struct fuse_fsm* fsm __attribute__((unused)), const char *, mode_t, dev_t);
 
-	/** Create a directory 
+	/** Create a directory
 	 *
 	 * Note that the mode argument may not have the type specification
 	 * bits set, i.e. S_ISDIR(mode) can be false.  To obtain the
 	 * correct directory type bits use  mode|S_IFDIR
 	 * */
-	int (*mkdir) (const char *, mode_t);
+	int (*mkdir) (struct fuse_fsm* fsm __attribute__((unused)), const char *, mode_t);
 
 	/** Remove a file */
-	int (*unlink) (const char *);
+	int (*unlink) (struct fuse_fsm* fsm __attribute__((unused)), const char *);
 
 	/** Remove a directory */
-	int (*rmdir) (const char *);
+	int (*rmdir) (struct fuse_fsm* fsm __attribute__((unused)), const char *);
 
 	/** Create a symbolic link */
-	int (*symlink) (const char *, const char *);
+	int (*symlink) (struct fuse_fsm* fsm __attribute__((unused)), const char *, const char *);
 
 	/** Rename a file */
-	int (*rename) (const char *, const char *);
+	int (*rename) (struct fuse_fsm* fsm __attribute__((unused)), const char *, const char *, unsigned int);
 
 	/** Create a hard link to a file */
-	int (*link) (const char *, const char *);
+	int (*link) (struct fuse_fsm* fsm __attribute__((unused)), const char *, const char *);
 
 	/** Change the permission bits of a file */
-	int (*chmod) (const char *, mode_t);
+	int (*chmod) (struct fuse_fsm* fsm __attribute__((unused)), const char *, mode_t);
 
 	/** Change the owner and group of a file */
-	int (*chown) (const char *, uid_t, gid_t);
+	int (*chown) (struct fuse_fsm* fsm __attribute__((unused)), const char *, uid_t, gid_t);
 
 	/** Change the size of a file */
-	int (*truncate) (const char *, off_t);
-
-	/** Change the access and/or modification times of a file
-	 *
-	 * Deprecated, use utimens() instead.
-	 */
-	int (*utime) (const char *, struct utimbuf *);
+	int (*truncate) (struct fuse_fsm*, const char *, off_t);
 
 	/** File open operation
 	 *
@@ -170,7 +194,7 @@ struct fuse_operations {
 	 *
 	 * Changed in version 2.2
 	 */
-	int (*open) (const char *, struct fuse_file_info *);
+	int (*open) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct fuse_file_info *);
 
 	/** Read data from an open file
 	 *
@@ -183,7 +207,7 @@ struct fuse_operations {
 	 *
 	 * Changed in version 2.2
 	 */
-	int (*read) (const char *, char *, size_t, off_t,
+	int (*read) (struct fuse_fsm* fsm __attribute__((unused)), const char *, char *, size_t, off_t,
 		     struct fuse_file_info *);
 
 	/** Write data to an open file
@@ -194,7 +218,7 @@ struct fuse_operations {
 	 *
 	 * Changed in version 2.2
 	 */
-	int (*write) (const char *, const char *, size_t, off_t,
+	int (*write) (struct fuse_fsm* fsm __attribute__((unused)), const char *, const char *, size_t, off_t,
 		      struct fuse_file_info *);
 
 	/** Get file system statistics
@@ -204,7 +228,7 @@ struct fuse_operations {
 	 * Replaced 'struct statfs' parameter with 'struct statvfs' in
 	 * version 2.5
 	 */
-	int (*statfs) (const char *, struct statvfs *);
+	int (*statfs) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct statvfs *);
 
 	/** Possibly flush cached data
 	 *
@@ -229,7 +253,7 @@ struct fuse_operations {
 	 *
 	 * Changed in version 2.2
 	 */
-	int (*flush) (const char *, struct fuse_file_info *);
+	int (*flush) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct fuse_file_info *);
 
 	/** Release an open file
 	 *
@@ -245,7 +269,7 @@ struct fuse_operations {
 	 *
 	 * Changed in version 2.2
 	 */
-	int (*release) (const char *, struct fuse_file_info *);
+	int (*release) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct fuse_file_info *);
 
 	/** Synchronize file contents
 	 *
@@ -254,19 +278,19 @@ struct fuse_operations {
 	 *
 	 * Changed in version 2.2
 	 */
-	int (*fsync) (const char *, int, struct fuse_file_info *);
+	int (*fsync) (struct fuse_fsm* fsm __attribute__((unused)), const char *, int, struct fuse_file_info *);
 
 	/** Set extended attributes */
-	int (*setxattr) (const char *, const char *, const char *, size_t, int);
+	int (*setxattr) (struct fuse_fsm* fsm __attribute__((unused)), const char *, const char *, const char *, size_t, int);
 
 	/** Get extended attributes */
-	int (*getxattr) (const char *, const char *, char *, size_t);
+	int (*getxattr) (struct fuse_fsm* fsm __attribute__((unused)), const char *, const char *, char *, size_t);
 
 	/** List extended attributes */
-	int (*listxattr) (const char *, char *, size_t);
+	int (*listxattr) (struct fuse_fsm* fsm __attribute__((unused)), const char *, char *, size_t);
 
 	/** Remove extended attributes */
-	int (*removexattr) (const char *, const char *);
+	int (*removexattr) (struct fuse_fsm* fsm __attribute__((unused)), const char *, const char *);
 
 	/** Open directory
 	 *
@@ -278,20 +302,16 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.3
 	 */
-	int (*opendir) (const char *, struct fuse_file_info *);
+	int (*opendir) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct fuse_file_info *);
 
 	/** Read directory
-	 *
-	 * This supersedes the old getdir() interface.  New applications
-	 * should use this.
 	 *
 	 * The filesystem may choose between two modes of operation:
 	 *
 	 * 1) The readdir implementation ignores the offset parameter, and
 	 * passes zero to the filler function's offset.  The filler
 	 * function will not return '1' (unless an error happens), so the
-	 * whole directory is read in a single readdir operation.  This
-	 * works just like the old getdir() method.
+	 * whole directory is read in a single readdir operation.
 	 *
 	 * 2) The readdir implementation keeps track of the offsets of the
 	 * directory entries.  It uses the offset parameter and always
@@ -300,15 +320,16 @@ struct fuse_operations {
 	 * '1'.
 	 *
 	 * Introduced in version 2.3
+	 * The "flags" argument added in version 3.0
 	 */
-	int (*readdir) (const char *, void *, fuse_fill_dir_t, off_t,
-			struct fuse_file_info *);
+	int (*readdir) (struct fuse_fsm* fsm __attribute__((unused)), const char *, void *, fuse_fill_dir_t, off_t,
+			struct fuse_file_info *, enum fuse_readdir_flags);
 
 	/** Release directory
 	 *
 	 * Introduced in version 2.3
 	 */
-	int (*releasedir) (const char *, struct fuse_file_info *);
+	int (*releasedir) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct fuse_file_info *);
 
 	/** Synchronize directory contents
 	 *
@@ -317,7 +338,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.3
 	 */
-	int (*fsyncdir) (const char *, int, struct fuse_file_info *);
+	int (*fsyncdir) (struct fuse_fsm* fsm __attribute__((unused)), const char *, int, struct fuse_file_info *);
 
 	/**
 	 * Initialize filesystem
@@ -351,7 +372,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.5
 	 */
-	int (*access) (const char *, int);
+	int (*access) (struct fuse_fsm* fsm __attribute__((unused)), const char *, int);
 
 	/**
 	 * Create and open a file
@@ -365,7 +386,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.5
 	 */
-	int (*create) (const char *, mode_t, struct fuse_file_info *);
+	int (*create) (struct fuse_fsm* fsm __attribute__((unused)), const char *, mode_t, struct fuse_file_info *);
 
 	/**
 	 * Change the size of an open file
@@ -379,7 +400,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.5
 	 */
-	int (*ftruncate) (const char *, off_t, struct fuse_file_info *);
+	int (*ftruncate) (struct fuse_fsm* fsm __attribute__((unused)), const char *, off_t, struct fuse_file_info *);
 
 	/**
 	 * Get attributes from an open file
@@ -393,7 +414,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.5
 	 */
-	int (*fgetattr) (const char *, struct stat *, struct fuse_file_info *);
+	int (*fgetattr) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct stat *, struct fuse_file_info *);
 
 	/**
 	 * Perform POSIX file locking operation
@@ -427,7 +448,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.6
 	 */
-	int (*lock) (const char *, struct fuse_file_info *, int cmd,
+	int (*lock) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct fuse_file_info *, int cmd,
 		     struct flock *);
 
 	/**
@@ -441,7 +462,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.6
 	 */
-	int (*utimens) (const char *, const struct timespec tv[2]);
+	int (*utimens) (struct fuse_fsm* fsm __attribute__((unused)), const char *, const struct timespec tv[2]);
 
 	/**
 	 * Map block index within file to block index within device
@@ -451,44 +472,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.6
 	 */
-	int (*bmap) (const char *, size_t blocksize, uint64_t *idx);
-
-	/**
-	 * Flag indicating that the filesystem can accept a NULL path
-	 * as the first argument for the following operations:
-	 *
-	 * read, write, flush, release, fsync, readdir, releasedir,
-	 * fsyncdir, ftruncate, fgetattr, lock, ioctl and poll
-	 *
-	 * If this flag is set these operations continue to work on
-	 * unlinked files even if "-ohard_remove" option was specified.
-	 */
-	unsigned int flag_nullpath_ok:1;
-
-	/**
-	 * Flag indicating that the path need not be calculated for
-	 * the following operations:
-	 *
-	 * read, write, flush, release, fsync, readdir, releasedir,
-	 * fsyncdir, ftruncate, fgetattr, lock, ioctl and poll
-	 *
-	 * Closely related to flag_nullpath_ok, but if this flag is
-	 * set then the path will not be calculaged even if the file
-	 * wasn't unlinked.  However the path can still be non-NULL if
-	 * it needs to be calculated for some other reason.
-	 */
-	unsigned int flag_nopath:1;
-
-	/**
-	 * Flag indicating that the filesystem accepts special
-	 * UTIME_NOW and UTIME_OMIT values in its utimens operation.
-	 */
-	unsigned int flag_utime_omit_ok:1;
-
-	/**
-	 * Reserved flags, don't set
-	 */
-	unsigned int flag_reserved:29;
+	int (*bmap) (struct fuse_fsm* fsm __attribute__((unused)), const char *, size_t blocksize, uint64_t *idx);
 
 	/**
 	 * Ioctl
@@ -505,7 +489,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.8
 	 */
-	int (*ioctl) (const char *, int cmd, void *arg,
+	int (*ioctl) (struct fuse_fsm* fsm __attribute__((unused)), const char *, int cmd, void *arg,
 		      struct fuse_file_info *, unsigned int flags, void *data);
 
 	/**
@@ -525,7 +509,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.8
 	 */
-	int (*poll) (const char *, struct fuse_file_info *,
+	int (*poll) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct fuse_file_info *,
 		     struct fuse_pollhandle *ph, unsigned *reventsp);
 
 	/** Write contents of buffer to an open file
@@ -536,7 +520,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.9
 	 */
-	int (*write_buf) (const char *, struct fuse_bufvec *buf, off_t off,
+	int (*write_buf) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct fuse_bufvec *buf, off_t off,
 			  struct fuse_file_info *);
 
 	/** Store data from an open file in a buffer
@@ -550,12 +534,12 @@ struct fuse_operations {
 	 *
 	 * The buffer must be allocated dynamically and stored at the
 	 * location pointed to by bufp.  If the buffer contains memory
-	 * regions, they too must be allocated using malloc().  The
+	 * regions, they too must be allocated using fuse_malloc().  The
 	 * allocated memory will be freed by the caller.
 	 *
 	 * Introduced in version 2.9
 	 */
-	int (*read_buf) (const char *, struct fuse_bufvec **bufp,
+	int (*read_buf) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct fuse_bufvec **bufp,
 			 size_t size, off_t off, struct fuse_file_info *);
 	/**
 	 * Perform BSD file locking operation
@@ -577,7 +561,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.9
 	 */
-	int (*flock) (const char *, struct fuse_file_info *, int op);
+	int (*flock) (struct fuse_fsm* fsm __attribute__((unused)), const char *, struct fuse_file_info *, int op);
 
 	/**
 	 * Allocates space for an open file
@@ -589,7 +573,7 @@ struct fuse_operations {
 	 *
 	 * Introduced in version 2.9.1
 	 */
-	int (*fallocate) (const char *, int, off_t, off_t,
+	int (*fallocate) (struct fuse_fsm* fsm __attribute__((unused)), const char *, int, off_t, off_t,
 			  struct fuse_file_info *);
 };
 
@@ -618,6 +602,8 @@ struct fuse_context {
 	mode_t umask;
 };
 
+
+
 /**
  * Main function of FUSE.
  *
@@ -640,6 +626,8 @@ struct fuse_context {
  * @param op the file system operation
  * @param user_data user data supplied in the context during the init() method
  * @return 0 on success, nonzero on failure
+ *
+ * Example usage, see hello.c
  */
 /*
   int fuse_main(int argc, char *argv[], const struct fuse_operations *op,
@@ -686,8 +674,12 @@ void fuse_destroy(struct fuse *f);
  *
  * @param f the FUSE handle
  * @return 0 if no error occurred, -1 otherwise
+ *
+ * See also: fuse_loop()
  */
 int fuse_loop(struct fuse *f);
+
+int fuse_loop_async(struct fuse *f, int fd, fuse_async_get_msg_t callback_on_new_msg, void* callback_payload);
 
 /**
  * Exit from event loop
@@ -706,8 +698,24 @@ void fuse_exit(struct fuse *f);
  * Calling this function requires the pthreads library to be linked to
  * the application.
  *
+ * Note: using fuse_loop() instead of fuse_loop_mt() means you are running in
+ * single-threaded mode, and that you will not have to worry about reentrancy,
+ * though you will have to worry about recursive lookups. In single-threaded
+ * mode, FUSE will wait for one callback to return before calling another.
+ *
+ * Enabling multiple threads, by using fuse_loop_mt(), will cause FUSE to make
+ * multiple simultaneous calls into the various callback functions given by your
+ * fuse_operations record.
+ *
+ * If you are using multiple threads, you can enjoy all the parallel execution
+ * and interactive response benefits of threads, and you get to enjoy all the
+ * benefits of race conditions and locking bugs, too. Ensure that any code used
+ * in the callback funtion of fuse_operations is also thread-safe.
+ *
  * @param f the FUSE handle
  * @return 0 if no error occurred, -1 otherwise
+ *
+ * See also: fuse_loop()
  */
 int fuse_loop_mt(struct fuse *f);
 
@@ -749,22 +757,17 @@ int fuse_getgroups(int size, gid_t list[]);
 int fuse_interrupted(void);
 
 /**
- * Obsolete, doesn't do anything
- *
- * @return -EINVAL
- */
-int fuse_invalidate(struct fuse *f, const char *path);
-
-/* Deprecated, don't use */
-int fuse_is_lib_option(const char *opt);
-
-/**
  * The real main function
  *
  * Do not call this directly, use fuse_main()
  */
 int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
 		   size_t op_size, void *user_data);
+
+
+int fuse_main_real_async(int argc, char *argv[], const struct fuse_operations *op,
+                         size_t op_size, void *user_data,int fd, fuse_async_get_msg_t callback_on_new_msg, void* callback_payload);
+
 
 /**
  * Start the cleanup thread when using option "remember".
@@ -814,80 +817,46 @@ struct fuse_fs;
  * fuse_fs_releasedir and fuse_fs_statfs, which return 0.
  */
 
-int fuse_fs_getattr(struct fuse_fs *fs, const char *path, struct stat *buf);
-int fuse_fs_fgetattr(struct fuse_fs *fs, const char *path, struct stat *buf,
-		     struct fuse_file_info *fi);
-int fuse_fs_rename(struct fuse_fs *fs, const char *oldpath,
-		   const char *newpath);
-int fuse_fs_unlink(struct fuse_fs *fs, const char *path);
-int fuse_fs_rmdir(struct fuse_fs *fs, const char *path);
-int fuse_fs_symlink(struct fuse_fs *fs, const char *linkname,
-		    const char *path);
-int fuse_fs_link(struct fuse_fs *fs, const char *oldpath, const char *newpath);
-int fuse_fs_release(struct fuse_fs *fs,	 const char *path,
-		    struct fuse_file_info *fi);
-int fuse_fs_open(struct fuse_fs *fs, const char *path,
-		 struct fuse_file_info *fi);
-int fuse_fs_read(struct fuse_fs *fs, const char *path, char *buf, size_t size,
-		 off_t off, struct fuse_file_info *fi);
-int fuse_fs_read_buf(struct fuse_fs *fs, const char *path,
-		     struct fuse_bufvec **bufp, size_t size, off_t off,
-		     struct fuse_file_info *fi);
-int fuse_fs_write(struct fuse_fs *fs, const char *path, const char *buf,
-		  size_t size, off_t off, struct fuse_file_info *fi);
-int fuse_fs_write_buf(struct fuse_fs *fs, const char *path,
-		      struct fuse_bufvec *buf, off_t off,
-		      struct fuse_file_info *fi);
-int fuse_fs_fsync(struct fuse_fs *fs, const char *path, int datasync,
-		  struct fuse_file_info *fi);
-int fuse_fs_flush(struct fuse_fs *fs, const char *path,
-		  struct fuse_file_info *fi);
-int fuse_fs_statfs(struct fuse_fs *fs, const char *path, struct statvfs *buf);
-int fuse_fs_opendir(struct fuse_fs *fs, const char *path,
-		    struct fuse_file_info *fi);
-int fuse_fs_readdir(struct fuse_fs *fs, const char *path, void *buf,
-		    fuse_fill_dir_t filler, off_t off,
-		    struct fuse_file_info *fi);
-int fuse_fs_fsyncdir(struct fuse_fs *fs, const char *path, int datasync,
-		     struct fuse_file_info *fi);
-int fuse_fs_releasedir(struct fuse_fs *fs, const char *path,
-		       struct fuse_file_info *fi);
-int fuse_fs_create(struct fuse_fs *fs, const char *path, mode_t mode,
-		   struct fuse_file_info *fi);
-int fuse_fs_lock(struct fuse_fs *fs, const char *path,
-		 struct fuse_file_info *fi, int cmd, struct flock *lock);
-int fuse_fs_flock(struct fuse_fs *fs, const char *path,
-		  struct fuse_file_info *fi, int op);
-int fuse_fs_chmod(struct fuse_fs *fs, const char *path, mode_t mode);
-int fuse_fs_chown(struct fuse_fs *fs, const char *path, uid_t uid, gid_t gid);
-int fuse_fs_truncate(struct fuse_fs *fs, const char *path, off_t size);
-int fuse_fs_ftruncate(struct fuse_fs *fs, const char *path, off_t size,
-		      struct fuse_file_info *fi);
-int fuse_fs_utimens(struct fuse_fs *fs, const char *path,
-		    const struct timespec tv[2]);
-int fuse_fs_access(struct fuse_fs *fs, const char *path, int mask);
-int fuse_fs_readlink(struct fuse_fs *fs, const char *path, char *buf,
-		     size_t len);
-int fuse_fs_mknod(struct fuse_fs *fs, const char *path, mode_t mode,
-		  dev_t rdev);
-int fuse_fs_mkdir(struct fuse_fs *fs, const char *path, mode_t mode);
-int fuse_fs_setxattr(struct fuse_fs *fs, const char *path, const char *name,
-		     const char *value, size_t size, int flags);
-int fuse_fs_getxattr(struct fuse_fs *fs, const char *path, const char *name,
-		     char *value, size_t size);
-int fuse_fs_listxattr(struct fuse_fs *fs, const char *path, char *list,
-		      size_t size);
-int fuse_fs_removexattr(struct fuse_fs *fs, const char *path,
-			const char *name);
-int fuse_fs_bmap(struct fuse_fs *fs, const char *path, size_t blocksize,
-		 uint64_t *idx);
-int fuse_fs_ioctl(struct fuse_fs *fs, const char *path, int cmd, void *arg,
-		  struct fuse_file_info *fi, unsigned int flags, void *data);
-int fuse_fs_poll(struct fuse_fs *fs, const char *path,
-		 struct fuse_file_info *fi, struct fuse_pollhandle *ph,
-		 unsigned *reventsp);
-int fuse_fs_fallocate(struct fuse_fs *fs, const char *path, int mode,
-		 off_t offset, off_t length, struct fuse_file_info *fi);
+int fuse_fs_getattr(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct stat *buf);
+int fuse_fs_fgetattr(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct stat *buf, struct fuse_file_info *fi);
+int fuse_fs_rename(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *oldpath, const char *newpath, unsigned int flags);
+int fuse_fs_unlink(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path);
+int fuse_fs_rmdir(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path);
+int fuse_fs_symlink(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *linkname, const char *path);
+int fuse_fs_link(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *oldpath, const char *newpath);
+int fuse_fs_release(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct fuse_file_info *fi);
+int fuse_fs_open(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct fuse_file_info *fi);
+int fuse_fs_read(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, char *mem, size_t size, off_t off, struct fuse_file_info *fi);
+int fuse_fs_read_buf(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct fuse_bufvec **bufp, size_t size, off_t off, struct fuse_file_info *fi);
+int fuse_fs_write(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, const char *mem, size_t size, off_t off, struct fuse_file_info *fi);
+int fuse_fs_write_buf(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *fi);
+int fuse_fs_fsync(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, int datasync, struct fuse_file_info *fi);
+int fuse_fs_flush(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct fuse_file_info *fi);
+int fuse_fs_statfs(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct statvfs *buf);
+int fuse_fs_opendir(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct fuse_file_info *fi);
+int fuse_fs_readdir(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, void *buf, fuse_fill_dir_t filler, off_t off, struct fuse_file_info *fi, enum fuse_readdir_flags flags);
+int fuse_fs_fsyncdir(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, int datasync, struct fuse_file_info *fi);
+int fuse_fs_releasedir(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct fuse_file_info *fi);
+int fuse_fs_create(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, mode_t mode, struct fuse_file_info *fi);
+int fuse_fs_lock(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct fuse_file_info *fi, int cmd, struct flock *lock);
+int fuse_fs_flock(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct fuse_file_info *fi, int op);
+int fuse_fs_chmod(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, mode_t mode);
+int fuse_fs_chown(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, uid_t uid, gid_t gid);
+int fuse_fs_truncate(struct fuse_fsm* fsm __attribute__((unused)),struct fuse_fs *fs, const char *path, off_t size);
+int fuse_fs_ftruncate(struct fuse_fsm* fsm __attribute__((unused)),struct fuse_fs *fs, const char *path, off_t size,struct fuse_file_info *fi);
+int fuse_fs_utimens(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, const struct timespec tv[2]);
+int fuse_fs_access(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, int mask);
+int fuse_fs_readlink(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, char *buf, size_t len);
+int fuse_fs_mknod(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, mode_t mode, dev_t rdev);
+int fuse_fs_mkdir(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, mode_t mode);
+int fuse_fs_setxattr(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, const char *name, const char *value, size_t size, int flags);
+int fuse_fs_getxattr(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, const char *name, char *value, size_t size);
+int fuse_fs_listxattr(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, char *list, size_t size);
+int fuse_fs_removexattr(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, const char *name);
+int fuse_fs_bmap(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, size_t blocksize, uint64_t *idx);
+int fuse_fs_ioctl(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, int cmd, void *arg, struct fuse_file_info *fi, unsigned int flags, void *data);
+int fuse_fs_poll(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, struct fuse_file_info *fi, struct fuse_pollhandle *ph, unsigned *reventsp);
+int fuse_fs_fallocate(struct fuse_fsm* fsm __attribute__((unused)), struct fuse_fs *fs, const char *path, int mode, off_t offset, off_t length, struct fuse_file_info *fi);
 void fuse_fs_init(struct fuse_fs *fs, struct fuse_conn_info *conn);
 void fuse_fs_destroy(struct fuse_fs *fs);
 
@@ -908,154 +877,45 @@ struct fuse_fs *fuse_fs_new(const struct fuse_operations *op, size_t op_size,
 			    void *user_data);
 
 /**
- * Filesystem module
+ * Factory for creating filesystem objects
  *
- * Filesystem modules are registered with the FUSE_REGISTER_MODULE()
- * macro.
+ * The function may use and remove options from 'args' that belong
+ * to this module.
  *
- * If the "-omodules=modname:..." option is present, filesystem
- * objects are created and pushed onto the stack with the 'factory'
- * function.
+ * For now the 'fs' vector always contains exactly one filesystem.
+ * This is the filesystem which will be below the newly created
+ * filesystem in the stack.
+ *
+ * @param args the command line arguments
+ * @param fs NULL terminated filesystem object vector
+ * @return the new filesystem object
  */
-struct fuse_module {
-	/**
-	 * Name of filesystem
-	 */
-	const char *name;
-
-	/**
-	 * Factory for creating filesystem objects
-	 *
-	 * The function may use and remove options from 'args' that belong
-	 * to this module.
-	 *
-	 * For now the 'fs' vector always contains exactly one filesystem.
-	 * This is the filesystem which will be below the newly created
-	 * filesystem in the stack.
-	 *
-	 * @param args the command line arguments
-	 * @param fs NULL terminated filesystem object vector
-	 * @return the new filesystem object
-	 */
-	struct fuse_fs *(*factory)(struct fuse_args *args,
-				   struct fuse_fs *fs[]);
-
-	struct fuse_module *next;
-	struct fusemod_so *so;
-	int ctr;
-};
-
-/**
- * Register a filesystem module
- *
- * This function is used by FUSE_REGISTER_MODULE and there's usually
- * no need to call it directly
- */
-void fuse_register_module(struct fuse_module *mod);
-
+typedef struct fuse_fs *(*fuse_module_factory_t)(struct fuse_args *args,
+						 struct fuse_fs *fs[]);
 /**
  * Register filesystem module
  *
- * For the parameters, see description of the fields in 'struct
- * fuse_module'
+ * If the "-omodules=@name_:..." option is present, filesystem
+ * objects are created and pushed onto the stack with the @factory_
+ * function.
+ *
+ * @name_ the name of this filesystem module
+ * @factory_ the factory function for this filesystem module
  */
-#define FUSE_REGISTER_MODULE(name_, factory_)				  \
-	static __attribute__((constructor)) void name_ ## _register(void) \
-	{								  \
-		static struct fuse_module mod =				  \
-			{ #name_, factory_, NULL, NULL, 0 };		  \
-		fuse_register_module(&mod);				  \
-	}
-
-
-/* ----------------------------------------------------------- *
- * Advanced API for event handling, don't worry about this...  *
- * ----------------------------------------------------------- */
-
-/* NOTE: the following functions are deprecated, and will be removed
-   from the 3.0 API.  Use the lowlevel session functions instead */
-
-/** Function type used to process commands */
-typedef void (*fuse_processor_t)(struct fuse *, struct fuse_cmd *, void *);
-
-/** This is the part of fuse_main() before the event loop */
-struct fuse *fuse_setup(int argc, char *argv[],
-			const struct fuse_operations *op, size_t op_size,
-			char **mountpoint, int *multithreaded,
-			void *user_data);
-
-/** This is the part of fuse_main() after the event loop */
-void fuse_teardown(struct fuse *fuse, char *mountpoint);
-
-/** Read a single command.  If none are read, return NULL */
-struct fuse_cmd *fuse_read_cmd(struct fuse *f);
-
-/** Process a single command */
-void fuse_process_cmd(struct fuse *f, struct fuse_cmd *cmd);
-
-/** Multi threaded event loop, which calls the custom command
-    processor function */
-int fuse_loop_mt_proc(struct fuse *f, fuse_processor_t proc, void *data);
-
-/** Return the exited flag, which indicates if fuse_exit() has been
-    called */
-int fuse_exited(struct fuse *f);
-
-/** This function is obsolete and implemented as a no-op */
-void fuse_set_getcontext_func(struct fuse_context *(*func)(void));
+#define FUSE_REGISTER_MODULE(name_, factory_) \
+	fuse_module_factory_t fuse_module_ ## name_ ## _factory = factory_;
 
 /** Get session from fuse object */
 struct fuse_session *fuse_get_session(struct fuse *f);
 
-/* ----------------------------------------------------------- *
- * Compatibility stuff					       *
- * ----------------------------------------------------------- */
-
-#if FUSE_USE_VERSION < 26
-#  include "fuse_compat.h"
-#  undef fuse_main
-#  if FUSE_USE_VERSION == 25
-#    define fuse_main(argc, argv, op)				\
-	fuse_main_real_compat25(argc, argv, op, sizeof(*(op)))
-#    define fuse_new fuse_new_compat25
-#    define fuse_setup fuse_setup_compat25
-#    define fuse_teardown fuse_teardown_compat22
-#    define fuse_operations fuse_operations_compat25
-#  elif FUSE_USE_VERSION == 22
-#    define fuse_main(argc, argv, op)				\
-	fuse_main_real_compat22(argc, argv, op, sizeof(*(op)))
-#    define fuse_new fuse_new_compat22
-#    define fuse_setup fuse_setup_compat22
-#    define fuse_teardown fuse_teardown_compat22
-#    define fuse_operations fuse_operations_compat22
-#    define fuse_file_info fuse_file_info_compat
-#  elif FUSE_USE_VERSION == 24
-#    error Compatibility with high-level API version 24 not supported
-#  else
-#    define fuse_dirfil_t fuse_dirfil_t_compat
-#    define __fuse_read_cmd fuse_read_cmd
-#    define __fuse_process_cmd fuse_process_cmd
-#    define __fuse_loop_mt fuse_loop_mt_proc
-#    if FUSE_USE_VERSION == 21
-#      define fuse_operations fuse_operations_compat2
-#      define fuse_main fuse_main_compat2
-#      define fuse_new fuse_new_compat2
-#      define __fuse_setup fuse_setup_compat2
-#      define __fuse_teardown fuse_teardown_compat22
-#      define __fuse_exited fuse_exited
-#      define __fuse_set_getcontext_func fuse_set_getcontext_func
-#    else
-#      define fuse_statfs fuse_statfs_compat1
-#      define fuse_operations fuse_operations_compat1
-#      define fuse_main fuse_main_compat1
-#      define fuse_new fuse_new_compat1
-#      define FUSE_DEBUG FUSE_DEBUG_COMPAT1
-#    endif
-#  endif
-#endif
-
 #ifdef __cplusplus
 }
 #endif
+
+struct fuse_async_response;
+#define FUSE_LIB_ERROR_PENDING_REQ (-76543210)
+
+
+
 
 #endif /* _FUSE_H_ */

@@ -6,41 +6,33 @@
   See the file COPYING.LIB
 */
 
+#include "config.h"
 #include "fuse_lowlevel.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
-
+#include <poll.h>
 int fuse_session_loop(struct fuse_session *se)
 {
 	int res = 0;
-	struct fuse_chan *ch = fuse_session_next_chan(se, NULL);
-	size_t bufsize = fuse_chan_bufsize(ch);
-	char *buf = (char *) malloc(bufsize);
-	if (!buf) {
-		fprintf(stderr, "fuse: failed to allocate read buffer\n");
-		return -1;
-	}
+	struct fuse_chan *ch = fuse_session_chan(se);
+	struct fuse_buf fbuf = {
+		.mem = NULL,
+	};
 
 	while (!fuse_session_exited(se)) {
-		struct fuse_chan *tmpch = ch;
-		struct fuse_buf fbuf = {
-			.mem = buf,
-			.size = bufsize,
-		};
-
-		res = fuse_session_receive_buf(se, &fbuf, &tmpch);
+		res = fuse_session_receive_buf(se, &fbuf, ch);
 
 		if (res == -EINTR)
 			continue;
 		if (res <= 0)
 			break;
 
-		fuse_session_process_buf(se, &fbuf, tmpch);
+		fuse_session_process_buf(se, &fbuf, ch);
 	}
 
-	free(buf);
+	fuse_free(fbuf.mem);
 	fuse_session_reset(se);
 	return res < 0 ? -1 : 0;
 }

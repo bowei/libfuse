@@ -1,14 +1,14 @@
-AC_INIT(fuse, 2.9.4)
-
+AC_INIT(fuse, 3.0.0_pre0)
 AC_PREREQ(2.59d)
 AC_CONFIG_MACRO_DIR([m4])
 AC_CANONICAL_TARGET
-AM_INIT_AUTOMAKE
+AM_INIT_AUTOMAKE([subdir-objects])
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES(yes)])
 AC_CONFIG_HEADERS(include/config.h)
 
 AC_PROG_LIBTOOL
-AC_PROG_CC
+AC_PROG_CC_STDC
+AC_SYS_LARGEFILE
 AC_PROG_MKDIR_P
 AM_PROG_CC_C_O
 
@@ -20,7 +20,7 @@ case $target_os in
 esac
 
 if test "$ac_env_CFLAGS_set" != set; then
-	CFLAGS="-Wall -W -Wno-sign-compare -Wstrict-prototypes -Wmissing-declarations -Wwrite-strings -g -O2 -fno-strict-aliasing"
+	CFLAGS="-Wall -W -Wno-sign-compare -Wstrict-prototypes -Wmissing-declarations -Wwrite-strings -g -O0 -fno-strict-aliasing"
 fi
 
 AC_ARG_ENABLE(lib,
@@ -43,18 +43,12 @@ subdirs2="include"
 if test "$enable_lib" != "no"; then
 	subdirs2="$subdirs2 lib";
 fi
-if test "$arch" = linux -a "$enable_util" != "no"; then
-	subdirs2="$subdirs2 util";
-fi
-if test "$enable_example" != "no"; then
-	subdirs2="$subdirs2 example";
-fi
 if test "$enable_mtab" = "no"; then
 	AC_DEFINE(IGNORE_MTAB, 1, [Don't update /etc/mtab])
 fi
 
-AC_CHECK_FUNCS([fork setxattr fdatasync splice vmsplice utimensat])
-AC_CHECK_FUNCS([posix_fallocate])
+AC_CHECK_FUNCS([fork setxattr fdatasync splice vmsplice utimensat pipe2])
+AC_CHECK_FUNCS([posix_fallocate fstatat openat readlinkat])
 AC_CHECK_MEMBERS([struct stat.st_atim])
 AC_CHECK_MEMBERS([struct stat.st_atimespec])
 
@@ -63,6 +57,11 @@ AC_SEARCH_LIBS(dlopen, [dl])
 AC_SEARCH_LIBS(clock_gettime, [rt])
 libfuse_libs=$LIBS
 LIBS=
+AC_CHECK_LIB(ulockmgr, ulockmgr_op)
+fusexmp_fh_libs=$LIBS
+AC_SUBST(fusexmp_fh_libs)
+LIBS=
+
 AC_ARG_WITH([libiconv-prefix],
 [  --with-libiconv-prefix=DIR  search for libiconv in DIR/include and DIR/lib], [
     for dir in `echo "$withval" | tr : ' '`; do
@@ -81,7 +80,7 @@ if test -z "$MOUNT_FUSE_PATH"; then
 fi
 AC_SUBST(MOUNT_FUSE_PATH)
 if test -z "$UDEV_RULES_PATH"; then
-	UDEV_RULES_PATH=/etc/udev/rules.d
+	UDEV_RULES_PATH="${prefix}/lib/udev/rules.d"
 	AC_MSG_NOTICE([UDEV_RULES_PATH env var not set, using default $UDEV_RULES_PATH])
 fi
 AC_SUBST(UDEV_RULES_PATH)
@@ -115,7 +114,7 @@ if test "$arch" = linux -a "$cross_compiling" != "yes"; then
 	fi
 fi
 
-AC_CONFIG_FILES([fuse.pc Makefile lib/Makefile util/Makefile example/Makefile include/Makefile doc/Makefile])
+AC_CONFIG_FILES([fuse3.pc Makefile lib/Makefile util/Makefile example/Makefile include/Makefile doc/Makefile])
 AC_OUTPUT
 
 if test "$util_linux_ok" = no; then

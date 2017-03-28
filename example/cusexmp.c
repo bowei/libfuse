@@ -6,10 +6,25 @@
   This program can be distributed under the terms of the GNU GPL.
   See the file COPYING.
 
-  gcc -Wall cusexmp.c `pkg-config fuse --cflags --libs` -o cusexmp
 */
 
-#define FUSE_USE_VERSION 29
+/** @file
+ * @tableofcontents
+ *
+ * cusexmp.c - CUSE example: Character device in Userspace
+ *
+ * \section section_compile compiling this example
+ *
+ * gcc -Wall cusexmp.c `pkg-config fuse3 --cflags --libs` -o cusexmp
+ *
+ * \section section_source the complete source
+ * \include cusexmp.c
+ */
+
+
+#define FUSE_USE_VERSION 30
+
+#include <config.h>
 
 #include <cuse_lowlevel.h>
 #include <fuse_opt.h>

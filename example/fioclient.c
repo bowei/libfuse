@@ -5,9 +5,23 @@
 
   This program can be distributed under the terms of the GNU GPL.
   See the file COPYING.
-
-  gcc -Wall fioclient.c -o fioclient
 */
+
+/** @file
+ * @tableofcontents
+ *
+ * fioclient.c - FUSE fioclient: FUSE ioctl example client
+ *
+ * \section section_compile compiling this example
+ *
+ * gcc -Wall fioclient.c -o fioclient
+ *
+ * \section section_source the complete source
+ * fioclient.c
+ * \include fioclient.c
+ */
+
+#include <config.h>
 
 #include <sys/types.h>
 #include <sys/fcntl.h>
